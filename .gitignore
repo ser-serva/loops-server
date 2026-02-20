@@ -8,6 +8,7 @@
 /vendor
 /mysqldb-9-data
 /redis-data
+/minio-data
 .env
 .env.backup
 .env.production

@@ -128,6 +128,8 @@ class AppServiceProvider extends ServiceProvider
 
     protected function configureSecureUrls()
     {
-        URL::forceHttps(true);
+        if (config('app.force_https', true)) {
+            URL::forceHttps(true);
+        }
     }
 }
