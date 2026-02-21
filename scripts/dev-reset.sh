@@ -22,7 +22,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
-DC="docker compose -f docker-compose.dev.yml"
+DC="docker compose -f docker-compose.dev.yml --env-file .env.dev"
 APP="$DC exec -T loops"
 
 # Colours
@@ -34,7 +34,7 @@ warn()  { echo -e "${YELLOW}⚠ $*${NC}"; }
 # ── Guard: stack must be running ──────────────────────────────────────────────
 if ! $DC ps loops 2>/dev/null | grep -q "running\|Up"; then
     echo -e "${RED}✗ loops_dev_app is not running. Start it first:${NC}"
-    echo "  docker compose -f docker-compose.dev.yml up -d"
+    echo "  docker compose -f docker-compose.dev.yml --env-file .env.dev up -d"
     exit 1
 fi
 
@@ -47,6 +47,18 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════════
 # FULL RESET
 # ═══════════════════════════════════════════════════════════════════════════════
+
+step "Fixing node_modules + vendor volume ownership for www-data..."
+# Named Docker volumes are populated from the image as root.
+# www-data needs write access for npm/composer operations.
+$DC exec -T -u root loops chown -R www-data:www-data \
+    /var/www/html/node_modules \
+    /var/www/html/vendor 2>/dev/null || true
+ok "Ownership fixed"
+
+step "Building frontend assets (Vite)..."
+$APP npm run build 2>&1 | tail -3
+ok "Frontend built → public/build/"
 
 step "Clearing Laravel caches..."
 $APP php artisan config:clear  || true
@@ -62,7 +74,7 @@ DB_USERNAME=$(grep '^DB_USERNAME=' .env.dev | cut -d= -f2 | tr -d '"' | tr -d "'
 DB_PASSWORD=$(grep '^DB_PASSWORD=' .env.dev | cut -d= -f2 | tr -d '"' | tr -d "'")
 DB_ROOT_PASSWORD=$(grep '^DB_ROOT_PASSWORD=' .env.dev | cut -d= -f2 | tr -d '"' | tr -d "'")
 
-docker compose -f docker-compose.dev.yml exec -T db \
+docker compose -f docker-compose.dev.yml --env-file .env.dev exec -T db \
     mysql -u root -p"${DB_ROOT_PASSWORD}" -e \
     "DROP DATABASE IF EXISTS \`${DB_DATABASE}\`; CREATE DATABASE \`${DB_DATABASE}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; GRANT ALL PRIVILEGES ON \`${DB_DATABASE}\`.* TO '${DB_USERNAME}'@'%'; FLUSH PRIVILEGES;"
 ok "Database '${DB_DATABASE}' recreated"

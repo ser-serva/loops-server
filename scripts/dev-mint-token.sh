@@ -17,7 +17,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
-DC="docker compose -f docker-compose.dev.yml"
+DC="docker compose -f docker-compose.dev.yml --env-file .env.dev"
 APP="$DC exec -T loops"
 
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -27,7 +27,7 @@ warn() { echo -e "${YELLOW}⚠ $*${NC}"; }
 
 # ── Guard ─────────────────────────────────────────────────────────────────────
 if ! $DC ps loops 2>/dev/null | grep -q "running\|Up"; then
-    echo "✗ loops_dev_app is not running. Start with: docker compose -f docker-compose.dev.yml up -d"
+    echo "✗ loops_dev_app is not running. Start with: docker compose -f docker-compose.dev.yml --env-file .env.dev up -d"
     exit 1
 fi
 
