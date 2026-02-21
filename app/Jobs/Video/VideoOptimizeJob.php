@@ -92,6 +92,25 @@ class VideoOptimizeJob implements ShouldQueue
                 throw new \Exception('Could not determine video dimensions');
             }
 
+            // FR-007: skip re-encoding for already-compatible videos (≤720p H.264)
+            $codecName = $videoStream->get('codec_name');
+
+            if ($codecName === 'h264' && $height <= 720) {
+                $video->vid_optimized = $video->vid;
+                $video->has_processed = true;
+                $video->has_audio = (bool) $hasAudio;
+                $video->status = 2;
+                $video->save();
+
+                Log::info('VideoOptimizeJob: passthrough (already 720p H.264)', [
+                    'video_id' => $video->id,
+                    'codec'    => $codecName,
+                    'height'   => $height,
+                ]);
+
+                return;
+            }
+
             if ($height > $width) {
                 $scaleFilter = 'scale=720:-2';
                 $maxBitrate = '2500k';
