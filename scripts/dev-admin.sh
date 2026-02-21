@@ -13,7 +13,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
-DC="docker compose -f docker-compose.dev.yml --env-file .env.dev"
+DC="docker compose --project-directory infra/dev -f infra/dev/compose.yaml"
 APP="$DC exec -T loops"
 
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; RED='\033[0;31m'; NC='\033[0m'

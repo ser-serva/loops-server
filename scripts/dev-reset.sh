@@ -11,7 +11,7 @@
 #   7. Print a fresh API token for looprr
 #
 # Requires the dev stack to be running:
-#   docker compose -f docker-compose.dev.yml up -d
+#   cd infra/dev && docker compose up -d
 #
 # Usage:
 #   ./scripts/dev-reset.sh [--token-only]
@@ -22,7 +22,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
-DC="docker compose -f docker-compose.dev.yml --env-file .env.dev"
+DC="docker compose --project-directory infra/dev -f infra/dev/compose.yaml"
 APP="$DC exec -T loops"
 
 # Colours
@@ -34,7 +34,7 @@ warn()  { echo -e "${YELLOW}⚠ $*${NC}"; }
 # ── Guard: stack must be running ──────────────────────────────────────────────
 if ! $DC ps loops 2>/dev/null | grep -q "running\|Up"; then
     echo -e "${RED}✗ loops_dev_app is not running. Start it first:${NC}"
-    echo "  docker compose -f docker-compose.dev.yml --env-file .env.dev up -d"
+    echo "  cd infra/dev && docker compose up -d"
     exit 1
 fi
 
@@ -68,13 +68,13 @@ $APP php artisan cache:clear   || true
 ok  "Caches cleared"
 
 step "Dropping and recreating dev database..."
-# Use root credentials from .env.dev
-DB_DATABASE=$(grep '^DB_DATABASE=' .env.dev | cut -d= -f2 | tr -d '"' | tr -d "'")
-DB_USERNAME=$(grep '^DB_USERNAME=' .env.dev | cut -d= -f2 | tr -d '"' | tr -d "'")
-DB_PASSWORD=$(grep '^DB_PASSWORD=' .env.dev | cut -d= -f2 | tr -d '"' | tr -d "'")
-DB_ROOT_PASSWORD=$(grep '^DB_ROOT_PASSWORD=' .env.dev | cut -d= -f2 | tr -d '"' | tr -d "'")
+# Use root credentials from infra/dev/.env
+DB_USERNAME=$(grep '^DB_USERNAME=' infra/dev/.env | cut -d= -f2 | tr -d '"' | tr -d "'")
+DB_PASSWORD=$(grep '^DB_PASSWORD=' infra/dev/.env | cut -d= -f2 | tr -d '"' | tr -d "'")
+DB_ROOT_PASSWORD=$(grep '^DB_ROOT_PASSWORD=' infra/dev/.env | cut -d= -f2 | tr -d '"' | tr -d "'")
+DB_DATABASE=$(grep '^DB_DATABASE=' infra/dev/.env | cut -d= -f2 | tr -d '"' | tr -d "'")
 
-docker compose -f docker-compose.dev.yml --env-file .env.dev exec -T db \
+$DC exec -T db \
     mysql -u root -p"${DB_ROOT_PASSWORD}" -e \
     "DROP DATABASE IF EXISTS \`${DB_DATABASE}\`; CREATE DATABASE \`${DB_DATABASE}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; GRANT ALL PRIVILEGES ON \`${DB_DATABASE}\`.* TO '${DB_USERNAME}'@'%'; FLUSH PRIVILEGES;"
 ok "Database '${DB_DATABASE}' recreated"
@@ -84,12 +84,12 @@ $APP php artisan migrate --force
 ok "Migrations complete"
 
 step "Generating Laravel application key (if missing)..."
-CURRENT_KEY=$(grep '^APP_KEY=' .env.dev | cut -d= -f2 | tr -d '"' | tr -d "'" | xargs)
+CURRENT_KEY=$(grep '^APP_KEY=' infra/dev/.env | cut -d= -f2 | tr -d '"' | tr -d "'" | xargs)
 if [[ -z "$CURRENT_KEY" ]]; then
     GENERATED_KEY=$($APP php artisan key:generate --show --no-interaction)
-    # Write key back into .env.dev
-    sed -i "s|^APP_KEY=.*|APP_KEY=${GENERATED_KEY}|" .env.dev
-    ok "App key generated and written to .env.dev"
+    # Write key back into infra/dev/.env
+    sed -i "s|^APP_KEY=.*|APP_KEY=${GENERATED_KEY}|" infra/dev/.env
+    ok "App key generated and written to infra/dev/.env"
 else
     ok "App key already present"
 fi

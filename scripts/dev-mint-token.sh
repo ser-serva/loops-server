@@ -5,7 +5,7 @@
 # and optionally writes it to looprr/.env.
 #
 # Requires the dev stack to be running:
-#   docker compose -f docker-compose.dev.yml up -d
+#   cd infra/dev && docker compose up -d
 #
 # Usage:
 #   ./scripts/dev-mint-token.sh [--write-looprr-env]
@@ -17,7 +17,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
-DC="docker compose -f docker-compose.dev.yml --env-file .env.dev"
+DC="docker compose --project-directory infra/dev -f infra/dev/compose.yaml"
 APP="$DC exec -T loops"
 
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -27,7 +27,7 @@ warn() { echo -e "${YELLOW}⚠ $*${NC}"; }
 
 # ── Guard ─────────────────────────────────────────────────────────────────────
 if ! $DC ps loops 2>/dev/null | grep -q "running\|Up"; then
-    echo "✗ loops_dev_app is not running. Start with: docker compose -f docker-compose.dev.yml --env-file .env.dev up -d"
+    echo "✗ loops_dev_app is not running. Start with: cd infra/dev && docker compose up -d"
     exit 1
 fi
 
@@ -71,7 +71,7 @@ if [[ "${1:-}" == "--write-looprr-env" ]]; then
         ok "LOOPS_API_TOKEN written to ${LOOPRR_ENV}"
         echo ""
         warn "Restart looprr backend to pick up the new token:"
-        echo "  docker compose -f docker-compose.dev.yml restart backend  (in looprr/)"
+        echo "  cd /path/to/looprr && docker compose -f docker-compose.dev.yml restart backend  (in looprr/)"
     fi
 else
     echo "To write this token to looprr/.env automatically, run:"
