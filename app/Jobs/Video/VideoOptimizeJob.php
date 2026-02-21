@@ -106,21 +106,21 @@ class VideoOptimizeJob implements ShouldQueue
                 $bufSize = '5000k';
             }
 
-            $format = new X264('aac');
+            $format = new X264('aac', 'h264_nvenc');
             $format
                 ->setAudioKiloBitrate(128)
                 ->setKiloBitrate(0)
                 ->setAdditionalParameters([
-                    '-preset', 'slow',
-                    '-crf', '23',
+                    '-preset', 'p4',
+                    '-tune', 'hq',
+                    '-rc', 'vbr',
+                    '-cq', '23',
                     '-maxrate', $maxBitrate,
                     '-bufsize', $bufSize,
-                    '-nal-hrd', 'vbr',
                     '-profile:v', 'high',
                     '-level', '4.1',
                     '-movflags', '+faststart',
                     '-pix_fmt', 'yuv420p',
-                    '-tune', 'film',
                     '-ac', '2',
                     '-t', (string) $maxDuration,
                 ]);
