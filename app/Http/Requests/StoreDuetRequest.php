@@ -42,7 +42,7 @@ class StoreDuetRequest extends FormRequest
     public function rules(): array
     {
         $config = Cache::get('settings:public');
-        $maxSize = data_get($config, 'media.max_video_size', 40);
+        $maxSize = data_get($config, 'media.max_video_size', 500);
 
         return [
             'video' => [
