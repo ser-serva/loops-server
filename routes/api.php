@@ -354,6 +354,12 @@ Route::prefix('api')->group(function () {
         Route::get('/invites/show/{id}', [AdminController::class, 'showAdminInvite'])->middleware('auth:web,api');
         Route::post('/invites/delete/{id}', [AdminController::class, 'deleteAdminInvite'])->middleware('auth:web,api');
         Route::post('/invites/update/{id}', [AdminController::class, 'updateAdminInvite'])->middleware('auth:web,api');
+
+        // Mirror account provisioning for automated publishers (e.g. Looprr)
+        // Only registered when LOOPS_MIRROR_PROVISIONING_ENABLED=true
+        if (config('loops.mirror_provisioning.enabled')) {
+            Route::post('/users/provision-mirror', [AdminController::class, 'provisionMirrorAccount'])->middleware('auth:web,api');
+        }
     });
 
     Route::any('{any}', function () {

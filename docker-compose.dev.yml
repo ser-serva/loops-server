@@ -197,6 +197,8 @@ services:
             AUTORUN_LARAVEL_ROUTE_CACHE: 'false'
             AUTORUN_LARAVEL_VIEW_CACHE: 'false'
             AUTORUN_LARAVEL_CONFIG_CACHE: 'false'
+            # Enable mirror account provisioning API for Looprr
+            LOOPS_MIRROR_PROVISIONING_ENABLED: 'true'
         volumes:
             # ── Source code bind-mount ──────────────────────────────────────────
             # PHP/Blade/Config changes are reflected immediately (no rebuild needed)

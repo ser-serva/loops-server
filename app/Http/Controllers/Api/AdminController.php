@@ -25,6 +25,7 @@ use App\Models\Profile;
 use App\Models\Report;
 use App\Models\User;
 use App\Models\Video;
+use App\Rules\ValidUsername;
 use App\Services\AccountService;
 use App\Services\AccountSuggestionService;
 use App\Services\AdminAuditLogService;
@@ -32,11 +33,13 @@ use App\Services\ExploreService;
 use App\Services\InstanceService;
 use App\Services\NodeinfoCrawlerService;
 use App\Services\SanitizeService;
+use App\Services\UsernameService;
 use App\Services\VersionCheckService;
 use App\Services\VideoService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -1434,5 +1437,86 @@ class AdminController extends Controller
         }
 
         return false;
+    }
+
+    /**
+     * Programmatically provision a mirror account for automated publishing.
+     *
+     * Creates a pre-verified user + profile and returns a Passport personal
+     * access token so the caller can immediately upload videos on its behalf.
+     * Intended for use by Looprr to create per-creator mirror accounts.
+     *
+     * POST /api/v1/admin/users/provision-mirror
+     * Body: { username, display_name?, admin_note? }
+     */
+    public function provisionMirrorAccount(Request $request)
+    {
+        if (! config('loops.mirror_provisioning.enabled')) {
+            abort(404);
+        }
+
+        $validated = $request->validate([
+            'username' => [
+                'required',
+                'string',
+                'min:2',
+                'max:24',
+                'unique:users,username',
+                new ValidUsername,
+                function ($attribute, $value, $fail) {
+                    if (app(UsernameService::class)->isReserved($value)) {
+                        $fail('This username is reserved.');
+                    }
+                },
+            ],
+            'display_name' => 'nullable|string|max:255',
+            'admin_note'   => 'nullable|string|max:500',
+        ]);
+
+        $username    = $validated['username'];
+        $displayName = $validated['display_name'] ?? $username;
+        $adminNote   = $validated['admin_note'] ?? 'mirror account provisioned via API';
+
+        // Build a deterministic synthetic email using the instance hostname.
+        // This account is never expected to receive email -- it is pre-verified.
+        $host  = parse_url(config('app.url'), PHP_URL_HOST) ?? 'localhost';
+        $email = 'mirror+' . $username . '@' . $host;
+
+        $user = DB::transaction(function () use ($username, $displayName, $email, $adminNote) {
+            $user = new User;
+            $user->name              = $displayName;
+            $user->username          = $username;
+            $user->email             = $email;
+            $user->password          = Hash::make(Str::random(40));
+            $user->email_verified_at = now();
+            $user->status            = 1;
+            $user->is_admin          = false;
+            $user->can_upload        = 1;
+            $user->can_comment       = 0;
+            $user->can_like          = 0;
+            $user->can_follow        = 1;
+            $user->admin_note        = $adminNote;
+            $user->save(); // UserObserver fires here -- auto-creates Profile
+
+            return $user;
+        });
+
+        // Mint a Passport personal access token for the new account.
+        $token = $user->createToken('looprr-mirror')->accessToken;
+
+        app(AdminAuditLogService::class)->log(
+            $request->user(),
+            'mirror_account:provisioned',
+            ['username' => $username, 'user_id' => $user->id],
+        );
+
+        return $this->data([
+            'user_id'    => (string) $user->id,
+            'profile_id' => (string) $user->profile_id,
+            'username'   => $user->username,
+            'display_name' => $user->name,
+            'email'      => $user->email,
+            'token'      => $token,
+        ], false, 201);
     }
 }

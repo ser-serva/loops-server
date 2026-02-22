@@ -101,6 +101,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Mirror Account Provisioning
+    |--------------------------------------------------------------------------
+    |
+    | Enables the POST /api/v1/admin/users/provision-mirror endpoint used by
+    | automated publishers (e.g. Looprr) to programmatically create dedicated
+    | per-creator accounts. Disabled by default; opt-in on instances that
+    | need it.
+    |
+    */
+    'mirror_provisioning' => [
+        'enabled' => (bool) env('LOOPS_MIRROR_PROVISIONING_ENABLED', false),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Local Domains (Same-Server Instances)
     |--------------------------------------------------------------------------
     |
