@@ -96,7 +96,7 @@ services:
         env_file:
             - .env.dev
         environment:
-            REDIS_ARGS: '--appendonly yes --requirepass ${REDIS_PASSWORD:-dev_redis_pass}'
+            REDIS_ARGS: '--appendonly yes --requirepass dev_redis_pass'
         ports:
             - '6380:6379'
         volumes:
@@ -181,8 +181,8 @@ services:
             - .env.dev
         environment:
             SSL_MODE: 'off'
-            PHP_POST_MAX_SIZE: '100M'
-            PHP_UPLOAD_MAX_FILE_SIZE: '100M'
+            PHP_POST_MAX_SIZE: '500M'
+            PHP_UPLOAD_MAX_FILE_SIZE: '500M'
             # Disable PHP opcode cache so edited files load immediately
             PHP_OPCACHE_ENABLE: '0'
             PHP_MEMORY_LIMIT: '512M'
@@ -209,6 +209,7 @@ services:
             # ── App storage + cache ────────────────────────────────────────────
             - ./storage:/var/www/html/storage
             - ./bootstrap/cache:/var/www/html/bootstrap/cache
+            - ./infra/nginx/upload-limits.conf:/etc/nginx/server-opts.d/upload-limits.conf:ro
         depends_on:
             db:
                 condition: service_healthy

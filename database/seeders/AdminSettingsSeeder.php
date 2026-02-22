@@ -133,7 +133,7 @@ class AdminSettingsSeeder extends Seeder
             // Media Settings
             [
                 'key' => 'media.maxVideoSize',
-                'value' => 40,
+                'value' => 500,
                 'type' => 'number',
                 'is_public' => true,
                 'description' => 'Maximum video file size in MB',
@@ -147,7 +147,7 @@ class AdminSettingsSeeder extends Seeder
             ],
             [
                 'key' => 'media.maxVideoDuration',
-                'value' => 60,
+                'value' => 180,
                 'type' => 'number',
                 'is_public' => true,
                 'description' => 'Maximum video duration in seconds',
