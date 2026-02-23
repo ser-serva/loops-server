@@ -161,8 +161,8 @@ services:
             - .env
         environment:
             SSL_MODE: 'off'
-            PHP_POST_MAX_SIZE: '100M'
-            PHP_UPLOAD_MAX_FILE_SIZE: '100M'
+            PHP_POST_MAX_SIZE: '500M'
+            PHP_UPLOAD_MAX_FILE_SIZE: '500M'
             # Disable PHP opcode cache so edited files load immediately
             PHP_OPCACHE_ENABLE: '0'
             PHP_MEMORY_LIMIT: '512M'

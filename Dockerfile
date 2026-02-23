@@ -51,6 +51,10 @@ RUN chown -R www-data:www-data /var/www/html \
 # Install composer dependencies
 RUN composer install --no-ansi --no-interaction --optimize-autoloader
 
+# Nginx upload limit override (server-opts.d is included at server block level)
+RUN mkdir -p /etc/nginx/server-opts.d
+COPY infra/nginx/upload-limits.conf /etc/nginx/server-opts.d/upload-limits.conf
+
 # Copy Node.js binaries/libraries from node stage
 COPY --from=node /usr/local/bin /usr/local/bin
 COPY --from=node /usr/local/lib /usr/local/lib
