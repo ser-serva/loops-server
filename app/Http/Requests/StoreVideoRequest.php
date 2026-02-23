@@ -51,7 +51,7 @@ class StoreVideoRequest extends FormRequest
                     ->min(250)
                     ->max($maxSize * 1024),
             ],
-            'description' => 'nullable|string|max:200',
+            'description' => 'nullable|string|max:2200',
             'comment_state' => 'sometimes|string|in:0,4',
             'can_download' => 'nullable|boolean',
             'can_comment' => 'nullable|boolean',
