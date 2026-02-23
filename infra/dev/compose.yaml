@@ -26,11 +26,13 @@ networks:
 volumes:
     loops_dev_mysql:
     loops_dev_redis:
-    loops_dev_minio:
     # Named volumes preserve composer vendor + node_modules installed in image
     # so the source bind-mount does not shadow them.
     loops_dev_vendor:
     loops_dev_nm:
+    # Storage on a Linux-FS named volume so chmod works (avoids NTFS /mnt/e
+    # stripping Unix permissions and breaking Passport OAuth key checks).
+    loops_dev_storage:
 
 services:
     # ─── MySQL ────────────────────────────────────────────────────────────────
@@ -106,7 +108,7 @@ services:
             MINIO_ROOT_USER: ${MINIO_ROOT_USER:-loops_minio_admin}
             MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-dev_minio_pass}
         volumes:
-            - loops_dev_minio:/data
+            - /mnt/e/docker-storage/loops-server/dev/minio-data:/data
         healthcheck:
             test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
             interval: 10s
@@ -187,7 +189,7 @@ services:
             - loops_dev_vendor:/var/www/html/vendor
             - loops_dev_nm:/var/www/html/node_modules
             # ── App storage + cache ────────────────────────────────────────────
-            - ../../storage:/var/www/html/storage
+            - loops_dev_storage:/var/www/html/storage
             - ../../bootstrap/cache:/var/www/html/bootstrap/cache
         depends_on:
             db:
@@ -225,7 +227,7 @@ services:
             - ../../:/var/www/html
             - loops_dev_vendor:/var/www/html/vendor
             - loops_dev_nm:/var/www/html/node_modules
-            - ../../storage:/var/www/html/storage
+            - loops_dev_storage:/var/www/html/storage
             - ../../bootstrap/cache:/var/www/html/bootstrap/cache
         depends_on:
             db:
