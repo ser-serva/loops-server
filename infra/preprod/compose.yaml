@@ -37,7 +37,6 @@ volumes:
     loops_preprod_cache:
 
 services:
-
     # ─── MySQL ─────────────────────────────────────────────────────────────────
     mysqldb:
         image: mysql:9
