@@ -1,8 +1,9 @@
 # loops-server — Development Compose
 #
 # Self-contained dev stack: infra (MySQL, Redis, MinIO, Mailpit) + app.
-# Source code is bind-mounted so PHP/Blade changes reflect without rebuild.
-# Uses separate container names / volumes / ports so it can coexist with prod.
+# Mirrors preprod behaviour but builds from the local Dockerfile instead of
+# pulling a GHCR image.  Source code changes require a rebuild:
+#   docker compose build && docker compose up -d
 #
 # Usage (from this directory):
 #   docker compose up -d
@@ -11,7 +12,7 @@
 #   docker compose down
 #
 # Env file: infra/dev/.env  (copy from ../../.env.dev.example, never commit)
-# Bind mounts / build context resolve from repo root (../../).
+# Build context resolves from repo root (../../).
 #
 # First-time setup — run after `up -d` and all services are healthy:
 #   ../../scripts/dev-reset.sh
@@ -26,13 +27,11 @@ networks:
 volumes:
     loops_dev_mysql:
     loops_dev_redis:
-    # Named volumes preserve composer vendor + node_modules installed in image
-    # so the source bind-mount does not shadow them.
-    loops_dev_vendor:
-    loops_dev_nm:
+    loops_dev_minio:
     # Storage on a Linux-FS named volume so chmod works (avoids NTFS /mnt/e
     # stripping Unix permissions and breaking Passport OAuth key checks).
     loops_dev_storage:
+    loops_dev_cache:
 
 services:
     # ─── MySQL ────────────────────────────────────────────────────────────────
@@ -108,7 +107,7 @@ services:
             MINIO_ROOT_USER: ${MINIO_ROOT_USER:-loops_minio_admin}
             MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-dev_minio_pass}
         volumes:
-            - /mnt/e/docker-storage/loops-server/dev/minio-data:/data
+            - loops_dev_minio:/data
         healthcheck:
             test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
             interval: 10s
@@ -148,7 +147,9 @@ services:
         networks:
             - loops_dev_net
 
-    # ─── Loops App (source-mounted) ───────────────────────────────────────────
+    # ─── Loops App ────────────────────────────────────────────────────────────
+    # Mirrors preprod — built from local Dockerfile instead of GHCR image.
+    # Code changes require: docker compose build loops && docker compose up -d loops
     loops:
         build:
             context: ../..
@@ -157,45 +158,32 @@ services:
         restart: unless-stopped
         ports:
             - '8086:8080'
-            # Vite dev server inside container (optional: run `npm run dev --host 0.0.0.0`)
-            - '5174:5173'
         env_file:
             - .env
         environment:
             SSL_MODE: 'off'
-            PHP_POST_MAX_SIZE: '500M'
-            PHP_UPLOAD_MAX_FILE_SIZE: '500M'
-            # Disable PHP opcode cache so edited files load immediately
+            PHP_POST_MAX_SIZE: '%00M'
+            PHP_UPLOAD_MAX_FILE_SIZE: '%00M'
             PHP_OPCACHE_ENABLE: '0'
             PHP_MEMORY_LIMIT: '512M'
-            # Auto-run migrations on start; skip caches for dev
             AUTORUN_ENABLED: 'true'
             AUTORUN_LARAVEL_MIGRATION: 'true'
             AUTORUN_LARAVEL_MIGRATION_ISOLATION: 'true'
-            # Storage symlink is pre-created on host (ln -sfn ../storage/app/public public/storage)
-            # so we skip it here — www-data can't write to host-owned public/ via bind-mount
-            AUTORUN_LARAVEL_STORAGE_LINK: 'false'
+            AUTORUN_LARAVEL_STORAGE_LINK: 'true'
             AUTORUN_LARAVEL_EVENT_CACHE: 'false'
             AUTORUN_LARAVEL_ROUTE_CACHE: 'false'
             AUTORUN_LARAVEL_VIEW_CACHE: 'false'
             AUTORUN_LARAVEL_CONFIG_CACHE: 'false'
         volumes:
-            # ── Source code bind-mount ──────────────────────────────────────────
-            # PHP/Blade/Config changes are reflected immediately (no rebuild needed)
-            - ../../:/var/www/html
-            # ── Preserve image-installed vendor + node_modules ─────────────────
-            # Prevents the source bind-mount from shadowing composer/npm artifacts.
-            # Named volumes are populated from the image on first `docker compose up`.
-            - loops_dev_vendor:/var/www/html/vendor
-            - loops_dev_nm:/var/www/html/node_modules
-            # ── App storage + cache ────────────────────────────────────────────
             - loops_dev_storage:/var/www/html/storage
-            - ../../bootstrap/cache:/var/www/html/bootstrap/cache
+            - loops_dev_cache:/var/www/html/bootstrap/cache
         depends_on:
             db:
                 condition: service_healthy
             redis:
                 condition: service_healthy
+            minio-init:
+                condition: service_completed_successfully
         networks:
             - loops_dev_net
         extra_hosts:
@@ -215,24 +203,63 @@ services:
             AUTORUN_ENABLED: 'false'
             AUTORUN_LARAVEL_MIGRATION: 'false'
             AUTORUN_LARAVEL_MIGRATION_ISOLATION: 'false'
-            AUTORUN_LARAVEL_STORAGE_LINK: 'false'
+            AUTORUN_LARAVEL_STORAGE_LINK: 'true'
             AUTORUN_LARAVEL_EVENT_CACHE: 'false'
             AUTORUN_LARAVEL_ROUTE_CACHE: 'false'
             AUTORUN_LARAVEL_VIEW_CACHE: 'false'
             AUTORUN_LARAVEL_CONFIG_CACHE: 'false'
             PHP_POST_MAX_SIZE: '500M'
             PHP_UPLOAD_MAX_FILE_SIZE: '500M'
-            PHP_OPCACHE_ENABLE: '0'
+            PHP_OPCACHE_ENABLE: '1'
         volumes:
-            - ../../:/var/www/html
-            - loops_dev_vendor:/var/www/html/vendor
-            - loops_dev_nm:/var/www/html/node_modules
             - loops_dev_storage:/var/www/html/storage
-            - ../../bootstrap/cache:/var/www/html/bootstrap/cache
+            - loops_dev_cache:/var/www/html/bootstrap/cache
         depends_on:
             db:
                 condition: service_healthy
             redis:
                 condition: service_healthy
+        networks:
+            - loops_dev_net
+        healthcheck:
+            test: ['CMD', 'php', 'artisan', 'horizon:status']
+            interval: 10s
+            timeout: 5s
+            retries: 3
+
+    # ─── Laravel Scheduler ────────────────────────────────────────────────────
+    scheduler:
+        build:
+            context: ../..
+            dockerfile: Dockerfile
+        container_name: loops_dev_scheduler
+        restart: unless-stopped
+        command: ['php', 'artisan', 'schedule:work']
+        stop_signal: SIGTERM
+        env_file:
+            - .env
+        environment:
+            AUTORUN_ENABLED: 'false'
+            AUTORUN_LARAVEL_MIGRATION: 'false'
+            AUTORUN_LARAVEL_MIGRATION_ISOLATION: 'false'
+            AUTORUN_LARAVEL_STORAGE_LINK: 'true'
+            AUTORUN_LARAVEL_EVENT_CACHE: 'false'
+            AUTORUN_LARAVEL_ROUTE_CACHE: 'false'
+            AUTORUN_LARAVEL_VIEW_CACHE: 'false'
+            AUTORUN_LARAVEL_CONFIG_CACHE: 'false'
+            PHP_POST_MAX_SIZE: '500M'
+            PHP_UPLOAD_MAX_FILE_SIZE: '500M'
+            PHP_OPCACHE_ENABLE: '1'
+        volumes:
+            - loops_dev_storage:/var/www/html/storage
+            - loops_dev_cache:/var/www/html/bootstrap/cache
+        depends_on:
+            db:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+        healthcheck:
+            test: ['CMD', 'healthcheck-schedule']
+            start_period: 10s
         networks:
             - loops_dev_net
