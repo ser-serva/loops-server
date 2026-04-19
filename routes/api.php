@@ -354,6 +354,15 @@ Route::prefix('api')->group(function () {
         Route::get('/invites/show/{id}', [AdminController::class, 'showAdminInvite'])->middleware('auth:web,api');
         Route::post('/invites/delete/{id}', [AdminController::class, 'deleteAdminInvite'])->middleware('auth:web,api');
         Route::post('/invites/update/{id}', [AdminController::class, 'updateAdminInvite'])->middleware('auth:web,api');
+
+        // Mirror account management for automated publishers (e.g. Looprr)
+        // Idempotent: creates the account on first call, rotates token on subsequent calls.
+        // Only registered when LOOPS_MIRROR_PROVISIONING_ENABLED=true
+        if (config('loops.mirror_provisioning.enabled')) {
+            Route::post('/users/manage-mirror', [AdminController::class, 'manageMirrorAccount'])->middleware('auth:web,api');
+            // Keep legacy alias so existing Looprr deployments continue to work during rollout
+            Route::post('/users/provision-mirror', [AdminController::class, 'manageMirrorAccount'])->middleware('auth:web,api');
+        }
     });
 
     Route::any('{any}', function () {

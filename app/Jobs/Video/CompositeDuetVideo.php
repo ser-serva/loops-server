@@ -105,11 +105,13 @@ class CompositeDuetVideo implements ShouldQueue
         string $outputPath,
         string $layout
     ) {
-        $format = new X264('aac', 'libx264');
+        $format = new X264('aac', 'h264_nvenc');
         $format->setAudioKiloBitrate(128);
         $format->setAdditionalParameters([
-            '-preset', 'slow',
-            '-crf', '23',
+            '-preset', 'p4',
+            '-tune', 'hq',
+            '-rc', 'vbr',
+            '-cq', '23',
             '-pix_fmt', 'yuv420p',
             '-movflags', '+faststart',
             '-ac', '2',

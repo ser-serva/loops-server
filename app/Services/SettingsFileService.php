@@ -41,7 +41,7 @@ class SettingsFileService
                 'customCSS' => $settings['branding.customCSS'] ?? false,
             ],
             'media' => [
-                'max_video_size' => $settings['media.maxVideoSize'] ?? 100,
+                'max_video_size' => $settings['media.maxVideoSize'] ?? 500,
                 'max_video_duration' => $settings['media.maxVideoDuration'] ?? 180,
                 'allowed_video_formats' => $settings['media.allowedVideoFormats'] ?? ['mp4'],
             ],
@@ -262,7 +262,7 @@ class SettingsFileService
             // Media Settings
             [
                 'key' => 'media.maxVideoSize',
-                'value' => 40,
+                'value' => 500,
                 'type' => 'number',
                 'is_public' => true,
                 'description' => 'Maximum video file size in MB',

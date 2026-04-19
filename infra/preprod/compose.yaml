@@ -1,0 +1,261 @@
+# loops-server — Pre-production (QA) infrastructure
+#
+# Runs the real GHCR alpha image end-to-end against a fresh isolated database.
+# Intended for testing tagged releases before promoting to production.
+#
+# Ports (chosen not to clash with dev or prod stacks on the same machine):
+#   8087  — Loops web app
+#   3308  — MySQL (direct access for QA inspection)
+#   6381  — Redis
+#   9014  — MinIO S3 API
+#   9015  — MinIO console UI
+#   8028  — Mailpit web UI (catch email)
+#   1028  — Mailpit SMTP
+#
+# Usage:
+#   1. cp infra/preprod/.env.example infra/preprod/.env  (fill in secrets)
+#   2. docker compose -f infra/preprod/compose.yaml pull
+#   3. docker compose -f infra/preprod/compose.yaml up -d
+#   4. Follow first-time setup in DOCKER_COMPOSE_SETUP.md (passport:keys etc.)
+#
+# To test a specific image tag:
+#   IMAGE_TAG=v0.1.0-alpha.2 docker compose -f infra/preprod/compose.yaml up -d
+#
+# To tear down and wipe data:
+#   docker compose -f infra/preprod/compose.yaml down -v
+
+name: loops-preprod
+
+networks:
+    loops_preprod_net:
+
+volumes:
+    loops_preprod_mysql:
+    loops_preprod_redis:
+    loops_preprod_minio:
+    loops_preprod_storage:
+    loops_preprod_cache:
+
+services:
+    # ─── MySQL ─────────────────────────────────────────────────────────────────
+    mysqldb:
+        image: mysql:9
+        container_name: loops_preprod_db
+        restart: unless-stopped
+        env_file:
+            - .env
+        environment:
+            MYSQL_DATABASE: ${DB_DATABASE:-loops_preprod}
+            MYSQL_USER: ${DB_USERNAME:-loops_admin}
+            MYSQL_PASSWORD: ${DB_PASSWORD}
+            MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+        ports:
+            - '3308:3306'
+        volumes:
+            - loops_preprod_mysql:/var/lib/mysql
+        healthcheck:
+            test:
+                [
+                    'CMD',
+                    'mysqladmin',
+                    'ping',
+                    '-h',
+                    '127.0.0.1',
+                    '-u',
+                    'root',
+                    '-p$$MYSQL_ROOT_PASSWORD'
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 30s
+        networks:
+            - loops_preprod_net
+
+    # ─── Redis ─────────────────────────────────────────────────────────────────
+    redis:
+        image: redis/redis-stack-server:7.4.0-v8
+        container_name: loops_preprod_redis
+        restart: unless-stopped
+        env_file:
+            - .env
+        environment:
+            REDIS_ARGS: '--appendonly yes --requirepass ${REDIS_PASSWORD}'
+        ports:
+            - '6381:6379'
+        volumes:
+            - loops_preprod_redis:/data
+        healthcheck:
+            test:
+                ['CMD-SHELL', 'redis-cli -a $$REDIS_PASSWORD --no-auth-warning ping | grep -q PONG']
+            interval: 10s
+            timeout: 3s
+            retries: 3
+            start_period: 10s
+        networks:
+            - loops_preprod_net
+
+    # ─── MinIO ─────────────────────────────────────────────────────────────────
+    minio:
+        image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+        container_name: loops_preprod_minio
+        restart: unless-stopped
+        command: server /data --console-address ":9001"
+        ports:
+            - '9014:9000'
+            - '9015:9001'
+        env_file:
+            - .env
+        environment:
+            MINIO_ROOT_USER: ${MINIO_ROOT_USER:-loops_minio_admin}
+            MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+        volumes:
+            - loops_preprod_minio:/data
+        healthcheck:
+            test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+            interval: 10s
+            timeout: 5s
+            retries: 3
+            start_period: 15s
+        networks:
+            - loops_preprod_net
+
+    minio-init:
+        image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+        container_name: loops_preprod_minio_init
+        restart: 'no'
+        depends_on:
+            minio:
+                condition: service_healthy
+        env_file:
+            - .env
+        entrypoint: >
+            /bin/sh -c "
+            mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
+            mc mb --ignore-existing local/loops &&
+            mc anonymous set download local/loops &&
+            echo 'Preprod MinIO bucket ready'
+            "
+        networks:
+            - loops_preprod_net
+
+    # ─── Mailpit (catch-all SMTP) ───────────────────────────────────────────────
+    mailpit:
+        image: axllent/mailpit:v1.29.1
+        container_name: loops_preprod_mailpit
+        restart: unless-stopped
+        ports:
+            - '8028:8025'
+            - '1028:1025'
+        networks:
+            - loops_preprod_net
+
+    # ─── Loops App ─────────────────────────────────────────────────────────────
+    loops:
+        image: ghcr.io/ser-serva/loops-server:${IMAGE_TAG:-alpha}
+        container_name: loops_preprod_app
+        restart: unless-stopped
+        ports:
+            - '8087:8080'
+        env_file:
+            - .env
+        environment:
+            SSL_MODE: 'off'
+            PHP_POST_MAX_SIZE: '100M'
+            PHP_UPLOAD_MAX_FILE_SIZE: '100M'
+            PHP_OPCACHE_ENABLE: '1'
+            PHP_MEMORY_LIMIT: '512M'
+            AUTORUN_ENABLED: 'true'
+            AUTORUN_LARAVEL_MIGRATION: 'true'
+            AUTORUN_LARAVEL_MIGRATION_ISOLATION: 'true'
+            AUTORUN_LARAVEL_STORAGE_LINK: 'true'
+            AUTORUN_LARAVEL_EVENT_CACHE: 'false'
+            AUTORUN_LARAVEL_ROUTE_CACHE: 'false'
+            AUTORUN_LARAVEL_VIEW_CACHE: 'false'
+            AUTORUN_LARAVEL_CONFIG_CACHE: 'false'
+        volumes:
+            - loops_preprod_storage:/var/www/html/storage
+            - loops_preprod_cache:/var/www/html/bootstrap/cache
+        depends_on:
+            mysqldb:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+            minio-init:
+                condition: service_completed_successfully
+        networks:
+            - loops_preprod_net
+        extra_hosts:
+            - 'host.docker.internal:host-gateway'
+
+    # ─── Horizon Queue Worker ───────────────────────────────────────────────────
+    # No GPU in preprod — ffmpeg falls back to software encoding.
+    horizon:
+        image: ghcr.io/ser-serva/loops-server:${IMAGE_TAG:-alpha}
+        container_name: loops_preprod_horizon
+        restart: unless-stopped
+        command: ['php', 'artisan', 'horizon']
+        env_file:
+            - .env
+        environment:
+            AUTORUN_ENABLED: 'false'
+            AUTORUN_LARAVEL_MIGRATION: 'false'
+            AUTORUN_LARAVEL_MIGRATION_ISOLATION: 'false'
+            AUTORUN_LARAVEL_STORAGE_LINK: 'true'
+            AUTORUN_LARAVEL_EVENT_CACHE: 'false'
+            AUTORUN_LARAVEL_ROUTE_CACHE: 'false'
+            AUTORUN_LARAVEL_VIEW_CACHE: 'false'
+            AUTORUN_LARAVEL_CONFIG_CACHE: 'false'
+            PHP_POST_MAX_SIZE: '500M'
+            PHP_UPLOAD_MAX_FILE_SIZE: '500M'
+            PHP_OPCACHE_ENABLE: '1'
+        volumes:
+            - loops_preprod_storage:/var/www/html/storage
+            - loops_preprod_cache:/var/www/html/bootstrap/cache
+        depends_on:
+            mysqldb:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+        networks:
+            - loops_preprod_net
+        healthcheck:
+            test: ['CMD', 'php', 'artisan', 'horizon:status']
+            interval: 10s
+            timeout: 5s
+            retries: 3
+
+    # ─── Laravel Scheduler ──────────────────────────────────────────────────────
+    scheduler:
+        image: ghcr.io/ser-serva/loops-server:${IMAGE_TAG:-alpha}
+        container_name: loops_preprod_scheduler
+        restart: unless-stopped
+        command: ['php', 'artisan', 'schedule:work']
+        stop_signal: SIGTERM
+        env_file:
+            - .env
+        environment:
+            AUTORUN_ENABLED: 'false'
+            AUTORUN_LARAVEL_MIGRATION: 'false'
+            AUTORUN_LARAVEL_MIGRATION_ISOLATION: 'false'
+            AUTORUN_LARAVEL_STORAGE_LINK: 'true'
+            AUTORUN_LARAVEL_EVENT_CACHE: 'false'
+            AUTORUN_LARAVEL_ROUTE_CACHE: 'false'
+            AUTORUN_LARAVEL_VIEW_CACHE: 'false'
+            AUTORUN_LARAVEL_CONFIG_CACHE: 'false'
+            PHP_POST_MAX_SIZE: '500M'
+            PHP_UPLOAD_MAX_FILE_SIZE: '500M'
+            PHP_OPCACHE_ENABLE: '1'
+        volumes:
+            - loops_preprod_storage:/var/www/html/storage
+            - loops_preprod_cache:/var/www/html/bootstrap/cache
+        depends_on:
+            mysqldb:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+        healthcheck:
+            test: ['CMD', 'healthcheck-schedule']
+            start_period: 10s
+        networks:
+            - loops_preprod_net

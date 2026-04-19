@@ -25,6 +25,7 @@ use App\Models\Profile;
 use App\Models\Report;
 use App\Models\User;
 use App\Models\Video;
+use App\Rules\ValidUsername;
 use App\Services\AccountService;
 use App\Services\AccountSuggestionService;
 use App\Services\AdminAuditLogService;
@@ -32,11 +33,13 @@ use App\Services\ExploreService;
 use App\Services\InstanceService;
 use App\Services\NodeinfoCrawlerService;
 use App\Services\SanitizeService;
+use App\Services\UsernameService;
 use App\Services\VersionCheckService;
 use App\Services\VideoService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -1434,5 +1437,118 @@ class AdminController extends Controller
         }
 
         return false;
+    }
+
+    /**
+     * Create or rotate a mirror account for automated publishing.
+     *
+     * Idempotent: if a user with the given username already exists, all their
+     * existing Passport tokens are revoked and a fresh token is minted.
+     * If the user does not exist, a pre-verified account + profile is created.
+     *
+     * This single endpoint replaces the old provision-mirror endpoint and
+     * supports both initial provisioning and token rotation (e.g. after Passport
+     * key rotation invalidates all tokens).
+     *
+     * POST /api/v1/admin/users/manage-mirror
+     * Body: { username, display_name?, admin_note? }
+     * Response: { user_id, profile_id, username, display_name, email, token, rotated }
+     *   rotated=true  → existing account, tokens were rotated
+     *   rotated=false → new account was created
+     */
+    public function manageMirrorAccount(Request $request)
+    {
+        if (! config('loops.mirror_provisioning.enabled')) {
+            abort(404);
+        }
+
+        $validated = $request->validate([
+            'username' => [
+                'required',
+                'string',
+                'min:2',
+                'max:24',
+                new ValidUsername,
+                function ($attribute, $value, $fail) {
+                    if (app(UsernameService::class)->isReserved($value)) {
+                        $fail('This username is reserved.');
+                    }
+                },
+            ],
+            'display_name' => 'nullable|string|max:255',
+            'admin_note'   => 'nullable|string|max:500',
+        ]);
+
+        $username    = $validated['username'];
+        $displayName = $validated['display_name'] ?? $username;
+        $adminNote   = $validated['admin_note'] ?? 'mirror account managed via API';
+
+        $host  = parse_url(config('app.url'), PHP_URL_HOST) ?? 'localhost';
+        $email = 'mirror+' . $username . '@' . $host;
+
+        // ── Rotate: existing user ────────────────────────────────────────────
+        $existing = User::where('username', $username)->first();
+
+        if ($existing) {
+            // Revoke all existing Passport personal-access tokens for this user
+            // so stale tokens (e.g. after Passport key rotation) cannot be reused.
+            $existing->tokens()->delete();
+
+            $token = $existing->createToken('looprr-mirror')->accessToken;
+
+            app(AdminAuditLogService::class)->log(
+                $request->user(),
+                'mirror_account:token_rotated',
+                ['username' => $username, 'user_id' => $existing->id],
+            );
+
+            return $this->data([
+                'user_id'      => (string) $existing->id,
+                'profile_id'   => (string) $existing->profile_id,
+                'username'     => $existing->username,
+                'display_name' => $existing->name,
+                'email'        => $existing->email,
+                'token'        => $token,
+                'rotated'      => true,
+            ], false, 200);
+        }
+
+        // ── Provision: new user ──────────────────────────────────────────────
+        $user = DB::transaction(function () use ($username, $displayName, $email, $adminNote) {
+            $user = new User;
+            $user->name              = $displayName;
+            $user->username          = $username;
+            $user->email             = $email;
+            $user->password          = Hash::make(Str::random(40));
+            $user->email_verified_at = now();
+            $user->status            = 1;
+            $user->is_admin          = false;
+            $user->can_upload        = 1;
+            $user->can_comment       = 0;
+            $user->can_like          = 0;
+            $user->can_follow        = 1;
+            $user->admin_note        = $adminNote;
+            $user->save(); // UserObserver fires here -- auto-creates Profile
+
+            return $user;
+        });
+
+        $token = $user->createToken('looprr-mirror')->accessToken;
+
+        app(AdminAuditLogService::class)->log(
+            $request->user(),
+            'mirror_account:provisioned',
+            ['username' => $username, 'user_id' => $user->id],
+        );
+
+        return $this->data([
+            'user_id'      => (string) $user->id,
+            'profile_id'   => (string) $user->profile_id,
+            'username'     => $user->username,
+            'display_name' => $user->name,
+            'email'        => $user->email,
+            'token'        => $token,
+            'rotated'      => false,
+        ], false, 201);
     }
 }

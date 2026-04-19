@@ -1,0 +1,265 @@
+# loops-server — Development Compose
+#
+# Self-contained dev stack: infra (MySQL, Redis, MinIO, Mailpit) + app.
+# Mirrors preprod behaviour but builds from the local Dockerfile instead of
+# pulling a GHCR image.  Source code changes require a rebuild:
+#   docker compose build && docker compose up -d
+#
+# Usage (from this directory):
+#   docker compose up -d
+#   docker compose logs -f loops
+#   docker compose exec loops bash
+#   docker compose down
+#
+# Env file: infra/dev/.env  (copy from ../../.env.dev.example, never commit)
+# Build context resolves from repo root (../../).
+#
+# First-time setup — run after `up -d` and all services are healthy:
+#   ../../scripts/dev-reset.sh
+
+# `name` pins the Docker Compose project name so volumes stay stable
+# regardless of the working directory this file is invoked from.
+name: loops-dev
+
+networks:
+    loops_dev_net:
+
+volumes:
+    loops_dev_mysql:
+    loops_dev_redis:
+    loops_dev_minio:
+    # Storage on a Linux-FS named volume so chmod works (avoids NTFS /mnt/e
+    # stripping Unix permissions and breaking Passport OAuth key checks).
+    loops_dev_storage:
+    loops_dev_cache:
+
+services:
+    # ─── MySQL ────────────────────────────────────────────────────────────────
+    db:
+        image: mysql:9
+        container_name: loops_dev_db
+        restart: unless-stopped
+        env_file:
+            - .env
+        environment:
+            MYSQL_DATABASE: ${DB_DATABASE:-loops_dev}
+            MYSQL_USER: ${DB_USERNAME:-loops_admin}
+            MYSQL_PASSWORD: ${DB_PASSWORD:-dev_password}
+            MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-dev_root_password}
+        ports:
+            - '3307:3306'
+        volumes:
+            - loops_dev_mysql:/var/lib/mysql
+        healthcheck:
+            test:
+                [
+                    'CMD',
+                    'mysqladmin',
+                    'ping',
+                    '-h',
+                    '127.0.0.1',
+                    '-u',
+                    'root',
+                    '-p$$MYSQL_ROOT_PASSWORD'
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 30s
+        networks:
+            - loops_dev_net
+
+    # ─── Redis ────────────────────────────────────────────────────────────────
+    redis:
+        image: redis/redis-stack-server:7.4.0-v8
+        container_name: loops_dev_redis
+        restart: unless-stopped
+        env_file:
+            - .env
+        environment:
+            REDIS_ARGS: '--appendonly yes --requirepass ${REDIS_PASSWORD:-dev_redis_pass}'
+        ports:
+            - '6380:6379'
+        volumes:
+            - loops_dev_redis:/data
+        healthcheck:
+            test:
+                ['CMD-SHELL', 'redis-cli -a $$REDIS_PASSWORD --no-auth-warning ping | grep -q PONG']
+            interval: 10s
+            timeout: 3s
+            retries: 3
+            start_period: 10s
+        networks:
+            - loops_dev_net
+
+    # ─── MinIO ────────────────────────────────────────────────────────────────
+    minio:
+        image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+        container_name: loops_dev_minio
+        restart: unless-stopped
+        command: server /data --console-address ":9001"
+        ports:
+            - '9010:9000'
+            - '9011:9001'
+        env_file:
+            - .env
+        environment:
+            MINIO_ROOT_USER: ${MINIO_ROOT_USER:-loops_minio_admin}
+            MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-dev_minio_pass}
+        volumes:
+            - loops_dev_minio:/data
+        healthcheck:
+            test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+            interval: 10s
+            timeout: 5s
+            retries: 3
+            start_period: 15s
+        networks:
+            - loops_dev_net
+
+    minio-init:
+        image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+        container_name: loops_dev_minio_init
+        restart: 'no'
+        depends_on:
+            minio:
+                condition: service_healthy
+        env_file:
+            - .env
+        entrypoint: >
+            /bin/sh -c "
+            mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
+            mc mb --ignore-existing local/loops &&
+            mc anonymous set download local/loops &&
+            echo 'Dev MinIO bucket ready'
+            "
+        networks:
+            - loops_dev_net
+
+    # ─── Mailpit ──────────────────────────────────────────────────────────────
+    mailpit:
+        image: axllent/mailpit:v1.29.1
+        container_name: loops_dev_mailpit
+        restart: unless-stopped
+        ports:
+            - '8026:8025'
+            - '1026:1025'
+        networks:
+            - loops_dev_net
+
+    # ─── Loops App ────────────────────────────────────────────────────────────
+    # Mirrors preprod — built from local Dockerfile instead of GHCR image.
+    # Code changes require: docker compose build loops && docker compose up -d loops
+    loops:
+        build:
+            context: ../..
+            dockerfile: Dockerfile
+        container_name: loops_dev_app
+        restart: unless-stopped
+        ports:
+            - '8086:8080'
+        env_file:
+            - .env
+        environment:
+            SSL_MODE: 'off'
+            PHP_POST_MAX_SIZE: '%00M'
+            PHP_UPLOAD_MAX_FILE_SIZE: '%00M'
+            PHP_OPCACHE_ENABLE: '0'
+            PHP_MEMORY_LIMIT: '512M'
+            AUTORUN_ENABLED: 'true'
+            AUTORUN_LARAVEL_MIGRATION: 'true'
+            AUTORUN_LARAVEL_MIGRATION_ISOLATION: 'true'
+            AUTORUN_LARAVEL_STORAGE_LINK: 'true'
+            AUTORUN_LARAVEL_EVENT_CACHE: 'false'
+            AUTORUN_LARAVEL_ROUTE_CACHE: 'false'
+            AUTORUN_LARAVEL_VIEW_CACHE: 'false'
+            AUTORUN_LARAVEL_CONFIG_CACHE: 'false'
+        volumes:
+            - loops_dev_storage:/var/www/html/storage
+            - loops_dev_cache:/var/www/html/bootstrap/cache
+        depends_on:
+            db:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+            minio-init:
+                condition: service_completed_successfully
+        networks:
+            - loops_dev_net
+        extra_hosts:
+            - 'host.docker.internal:host-gateway'
+
+    # ─── Horizon Queue Worker ─────────────────────────────────────────────────
+    horizon:
+        build:
+            context: ../..
+            dockerfile: Dockerfile
+        container_name: loops_dev_horizon
+        restart: unless-stopped
+        command: ['php', 'artisan', 'horizon']
+        env_file:
+            - .env
+        environment:
+            AUTORUN_ENABLED: 'false'
+            AUTORUN_LARAVEL_MIGRATION: 'false'
+            AUTORUN_LARAVEL_MIGRATION_ISOLATION: 'false'
+            AUTORUN_LARAVEL_STORAGE_LINK: 'true'
+            AUTORUN_LARAVEL_EVENT_CACHE: 'false'
+            AUTORUN_LARAVEL_ROUTE_CACHE: 'false'
+            AUTORUN_LARAVEL_VIEW_CACHE: 'false'
+            AUTORUN_LARAVEL_CONFIG_CACHE: 'false'
+            PHP_POST_MAX_SIZE: '500M'
+            PHP_UPLOAD_MAX_FILE_SIZE: '500M'
+            PHP_OPCACHE_ENABLE: '1'
+        volumes:
+            - loops_dev_storage:/var/www/html/storage
+            - loops_dev_cache:/var/www/html/bootstrap/cache
+        depends_on:
+            db:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+        networks:
+            - loops_dev_net
+        healthcheck:
+            test: ['CMD', 'php', 'artisan', 'horizon:status']
+            interval: 10s
+            timeout: 5s
+            retries: 3
+
+    # ─── Laravel Scheduler ────────────────────────────────────────────────────
+    scheduler:
+        build:
+            context: ../..
+            dockerfile: Dockerfile
+        container_name: loops_dev_scheduler
+        restart: unless-stopped
+        command: ['php', 'artisan', 'schedule:work']
+        stop_signal: SIGTERM
+        env_file:
+            - .env
+        environment:
+            AUTORUN_ENABLED: 'false'
+            AUTORUN_LARAVEL_MIGRATION: 'false'
+            AUTORUN_LARAVEL_MIGRATION_ISOLATION: 'false'
+            AUTORUN_LARAVEL_STORAGE_LINK: 'true'
+            AUTORUN_LARAVEL_EVENT_CACHE: 'false'
+            AUTORUN_LARAVEL_ROUTE_CACHE: 'false'
+            AUTORUN_LARAVEL_VIEW_CACHE: 'false'
+            AUTORUN_LARAVEL_CONFIG_CACHE: 'false'
+            PHP_POST_MAX_SIZE: '500M'
+            PHP_UPLOAD_MAX_FILE_SIZE: '500M'
+            PHP_OPCACHE_ENABLE: '1'
+        volumes:
+            - loops_dev_storage:/var/www/html/storage
+            - loops_dev_cache:/var/www/html/bootstrap/cache
+        depends_on:
+            db:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+        healthcheck:
+            test: ['CMD', 'healthcheck-schedule']
+            start_period: 10s
+        networks:
+            - loops_dev_net

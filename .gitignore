@@ -8,9 +8,11 @@
 /vendor
 /mysqldb-9-data
 /redis-data
+/minio-data
 .env
 .env.backup
 .env.production
+.env.dev
 .phpactor.json
 .phpunit.result.cache
 Homestead.json

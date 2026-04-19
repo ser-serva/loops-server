@@ -1,0 +1,96 @@
+# Loops Server — Docker image build and publish
+#
+# Extends the existing CI pipeline (lint/type-check jobs remain separate).
+# On push to main or manual dispatch: builds image without pushing (CI validation).
+# On semver tag push (v*.*.*): builds and pushes to ghcr.io.
+#   - Stable tags (vX.Y.Z)       → :X.Y.Z + :X.Y + :X + :latest
+#   - Pre-release (vX.Y.Z-beta)  → :X.Y.Z-beta only (never updates :latest)
+#
+# Image published:
+#   ghcr.io/ser-serva/loops-server:{tag}
+#
+# Registry auth: uses GITHUB_TOKEN automatically — no secrets needed.
+# NOTE: Existing CI workflows (JS-Build, php-larastan, etc.) are unchanged
+#       and will still run on PR/push events as configured.
+
+name: Docker Build & Publish
+
+on:
+    push:
+        tags:
+            - 'v[0-9]+.[0-9]+.[0-9]+**' # v1.0.0, v1.0.0-beta.1, etc.
+        branches:
+            - main
+    workflow_dispatch:
+
+env:
+    REGISTRY: ghcr.io
+    # IMAGE_OWNER resolves to the GitHub org/user that owns this repo —
+    # works under vineethsoma/loops-server today and ser-serva/loops-server once transferred.
+    IMAGE_OWNER: ${{ github.repository_owner }}
+
+jobs:
+    # ── Build validation (push to main / manual dispatch, never pushes image) ──
+    build-test:
+        name: Build (no push)
+        runs-on: ubuntu-latest
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Build image (no push)
+              uses: docker/build-push-action@v6
+              with:
+                  context: .
+                  push: false
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
+
+    # ── Publish image ──────────────────────────────────────────────────────────
+    publish:
+        name: Publish loops-server
+        runs-on: ubuntu-latest
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        permissions:
+            contents: read
+            packages: write
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Log in to ghcr.io
+              uses: docker/login-action@v3
+              with:
+                  registry: ${{ env.REGISTRY }}
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Extract metadata
+              id: meta
+              uses: docker/metadata-action@v5
+              with:
+                  images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/loops-server
+                  tags: |
+                      # vX.Y.Z → X.Y.Z, X.Y, X, latest (stable semver only)
+                      type=semver,pattern={{version}}
+                      type=semver,pattern={{major}}.{{minor}}
+                      type=semver,pattern={{major}},enable=${{ !contains(github.ref, '-') }}
+                      type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+            - name: Build and push loops-server
+              uses: docker/build-push-action@v6
+              with:
+                  context: .
+                  platforms: linux/amd64
+                  push: true
+                  tags: ${{ steps.meta.outputs.tags }}
+                  labels: ${{ steps.meta.outputs.labels }}
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max

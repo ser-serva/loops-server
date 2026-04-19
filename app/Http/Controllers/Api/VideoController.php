@@ -181,7 +181,11 @@ class VideoController extends Controller
                 new VideoProcessingCompleteJob($model),
             ])->dispatch($model);
 
-            return $this->success();
+            return response()->json([
+                'id'    => (string) $model->id,
+                'data'  => [],
+                'error' => ['code' => 'ok', 'message' => ''],
+            ]);
 
         } catch (\Exception $e) {
             DB::rollBack();
